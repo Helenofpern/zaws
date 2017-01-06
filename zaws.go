@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/rds"
 	"net"
 	"os"
 	"strconv"
@@ -75,6 +76,8 @@ type Data struct {
 	InstancePrivateAddr string `json:"{#INSTANCE.PRIVATE.ADDR},omitempty"`
 	ElbName             string `json:"{#ELB.NAME},omitempty"`
 	ElbDnsName          string `json:"{#ELB.DNS.NAME},omitempty"`
+	RdsName             string `json:"{#RDS.NAME},omitempty"`
+	RdsDnsName          string `json:"{#RDS.DNS.NAME},omitempty"`
 }
 
 // Common util
@@ -150,10 +153,25 @@ func get_ec2_list(sess *session.Session) []*ec2.Instance {
 	return instances
 }
 
+func get_rds_list(sess *session.Session) []*rds.DBInstance {
+
+	svc := rds.New(sess)
+
+	resp, err := svc.DescribeDBInstances(nil)
+
+	if err != nil {
+		fmt.Printf("[ERROR] Fail DescribeDBInstances API call: %s \n", err.Error())
+		os.Exit(1)
+	}
+
+	return resp.DBInstances
+}
+
 func get_elb_list(sess *session.Session) []*elb.LoadBalancerDescription {
 	svc := elb.New(sess)
 	params := &elb.DescribeLoadBalancersInput{
 		LoadBalancerNames: []*string{},
+
 	}
 	resp, err := svc.DescribeLoadBalancers(params)
 
@@ -196,11 +214,36 @@ func (z *Zaws) ShowElbList() {
 	fmt.Printf(convert_to_lldjson_string(list))
 }
 
+func (z *Zaws) ShowRdsList() {
+	list := make([]Data, 0)
+	rds_s := get_rds_list(z.AwsSession)
+	for _, rds_v := range rds_s {
+		data := Data{RdsName: *rds_v.DBInstanceIdentifier, RdsDnsName: *rds_v.Endpoint.Address}
+		list = append(list, data)
+	}
+	fmt.Printf(convert_to_lldjson_string(list))
+}
+
 func (z *Zaws) ShowEC2CloudwatchMetricsList() {
 	list := make([]Data, 0)
 	metrics := get_metric_list(z.AwsSession, "InstanceId", z.TargetId)
 	for _, metric := range metrics {
 		datapoints := get_metric_stats(z.AwsSession, "InstanceId", z.TargetId, *metric.MetricName, *metric.Namespace)
+		data := Data{MetricName: *metric.MetricName, MetricNamespace: *metric.Namespace}
+		if len(datapoints) > 0 {
+			data.MetricUnit = *datapoints[0].Unit
+		}
+		list = append(list, data)
+	}
+
+	fmt.Printf(convert_to_lldjson_string(list))
+}
+
+func (z *Zaws) ShowRDSCloudwatchMetricsList() {
+	list := make([]Data, 0)
+	metrics := get_metric_list(z.AwsSession, "DBInstanceIdentifier", z.TargetId)
+	for _, metric := range metrics {
+		datapoints := get_metric_stats(z.AwsSession, "DBInstanceIdentifier", z.TargetId, *metric.MetricName, *metric.Namespace)
 		data := Data{MetricName: *metric.MetricName, MetricNamespace: *metric.Namespace}
 		if len(datapoints) > 0 {
 			data.MetricUnit = *datapoints[0].Unit
@@ -235,6 +278,9 @@ func (z *Zaws) ShowELBCloudwatchMetricsList() {
 
 func (z *Zaws) SendEc2MetricStats() {
 	z.SendMetricStats("InstanceId")
+}
+func (z *Zaws) SendRdsMetricStats() {
+	z.SendMetricStats("IDBInstanceIdentifier")
 }
 func (z *Zaws) SendElbMetricStats() {
 	z.SendMetricStats("LoadBalancerName")
@@ -291,6 +337,15 @@ func main() {
 		default:
 			usage()
 		}
+	case "rds":
+		switch os.Args[2] {
+		case "list":
+			os.Args = os.Args[2:]
+			zaws := NewZaws()
+			zaws.ShowRdsList()
+		default:
+			usage()
+		}
 	case "cloudwatch":
 		switch os.Args[2] {
 		case "list":
@@ -303,6 +358,9 @@ func main() {
 				zaws := NewZaws()
 				zaws.ShowEC2CloudwatchMetricsList()
 			case "rds":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.ShowRDSCloudwatchMetricsList()
 			case "elb":
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
@@ -319,6 +377,10 @@ func main() {
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
 				zaws.SendEc2MetricStats()
+			case "rds":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.SendRdsMetricStats()
 			case "elb":
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
