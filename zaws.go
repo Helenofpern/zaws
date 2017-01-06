@@ -280,7 +280,7 @@ func (z *Zaws) SendEc2MetricStats() {
 	z.SendMetricStats("InstanceId")
 }
 func (z *Zaws) SendRdsMetricStats() {
-	z.SendMetricStats("IDBInstanceIdentifier")
+	z.SendMetricStats("DBInstanceIdentifier")
 }
 func (z *Zaws) SendElbMetricStats() {
 	z.SendMetricStats("LoadBalancerName")
