@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/rds"
+	"github.com/aws/aws-sdk-go/service/sqs"
 	"net"
 	"os"
 	"strconv"
@@ -276,6 +277,28 @@ func (z *Zaws) ShowELBCloudwatchMetricsList() {
 	fmt.Printf(convert_to_lldjson_string(list))
 }
 
+func (z *Zaws) ShowSQSCloudwatchMetricsList() {
+	list := make([]Data, 0)
+	metrics := get_metric_list(z.AwsSession, "QueueName", z.TargetId)
+	for _, metric := range metrics {
+		datapoints := get_metric_stats(z.AwsSession, "QueueName", z.TargetId, *metric.MetricName, *metric.Namespace)
+		metric_name := *metric.MetricName
+		for _, dimension := range metric.Dimensions {
+			if *dimension.Name == "AvailabilityZone" {
+				metric_name = *metric.MetricName + "." + *dimension.Value
+				break
+			}
+		}
+		data := Data{MetricName: metric_name, MetricNamespace: *metric.Namespace}
+		if len(datapoints) > 0 {
+			data.MetricUnit = *datapoints[0].Unit
+		}
+		list = append(list, data)
+	}
+
+	fmt.Printf(convert_to_lldjson_string(list))
+}
+
 func (z *Zaws) SendEc2MetricStats() {
 	z.SendMetricStats("InstanceId")
 }
@@ -284,6 +307,9 @@ func (z *Zaws) SendRdsMetricStats() {
 }
 func (z *Zaws) SendElbMetricStats() {
 	z.SendMetricStats("LoadBalancerName")
+}
+func (z *Zaws) SendSQSMetricStats() {
+	z.SendMetricStats("QueueName")
 }
 
 func (z *Zaws) SendMetricStats(identity_name string) {
@@ -365,6 +391,10 @@ func main() {
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
 				zaws.ShowELBCloudwatchMetricsList()
+			case "sqs":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.ShowSQSCloudwatchMetricsList()
 			default:
 				usage()
 			}
@@ -385,6 +415,10 @@ func main() {
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
 				zaws.SendElbMetricStats()
+			case "sqs":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.SendSQSMetricStats()
 			default:
 				usage()
 			}
