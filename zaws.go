@@ -113,13 +113,66 @@ func get_metric_list(sess *session.Session, identity_name, target_id string) []*
 	return resp.Metrics
 }
 
+func map_metric_name_to_statistics (metric_name string) string {
+
+	switch metric_name {
+	case "ApproximateAgeOfOldestMessage":
+		return "Maximum"
+
+	case "NumberOfMessagesDeleted" :
+		fallthrough
+	case "NumberOfEmptyReceives" :
+		fallthrough
+	case "ApproximateNumberOfMessagesVisible":
+		fallthrough
+	case "ApproximateNumberOfMessagesNotVisible":
+		fallthrough
+	case "NumberOfMessagesSent":
+		fallthrough
+	case "ApproximateNumberOfMessagesDelayed":
+		fallthrough
+	case "NumberOfMessagesReceived":
+		return "Sum"
+
+	default:
+		return "Average"
+
+
+	}
+}
+
+func get_datapont_value(metric_name string, datapoint *cloudwatch.Datapoint) float64 {
+	switch metric_name {
+	case "ApproximateAgeOfOldestMessage":
+		return *datapoint.Maximum
+
+	case "NumberOfMessagesDeleted":
+		fallthrough
+	case "NumberOfEmptyReceives":
+		fallthrough
+	case "ApproximateNumberOfMessagesVisible":
+		fallthrough
+	case "ApproximateNumberOfMessagesNotVisible":
+		fallthrough
+	case "NumberOfMessagesSent":
+		fallthrough
+	case "ApproximateNumberOfMessagesDelayed":
+		fallthrough
+	case "NumberOfMessagesReceived":
+		return *datapoint.Sum
+
+	default:
+		return *datapoint.Average
+	}
+}
+
 func get_metric_stats(sess *session.Session, identity_name, target_id, metric_name, metric_namespace string) []*cloudwatch.Datapoint {
 
 	svc := cloudwatch.New(sess)
 	t := time.Now()
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  aws.String(metric_namespace),
-		Statistics: []*string{aws.String("Average")},
+		Statistics: []*string{aws.String(map_metric_name_to_statistics(metric_name))},
 		EndTime:    aws.Time(t),
 		Period:     aws.Int64(300),
 		StartTime:  aws.Time(t.Add(time.Duration(-10) * time.Minute)),
@@ -208,8 +261,8 @@ func (z *Zaws) ShowEc2List() {
 func (z *Zaws) ShowElbList() {
 	list := make([]Data, 0)
 	elbs := get_elb_list(z.AwsSession)
-	for _, elb := range elbs {
-		data := Data{ElbName: *elb.LoadBalancerName, ElbDnsName: *elb.DNSName}
+	for _, elb_data := range elbs {
+		data := Data{ElbName: *elb_data.LoadBalancerName, ElbDnsName: *elb_data.DNSName}
 		list = append(list, data)
 	}
 	fmt.Printf(convert_to_lldjson_string(list))
@@ -225,6 +278,37 @@ func (z *Zaws) ShowRdsList() {
 	fmt.Printf(convert_to_lldjson_string(list))
 }
 
+func map_unit_name(unit string) string {
+
+	switch unit {
+	case "Count":
+		return " "
+	case "Seconds":
+		return "s"
+
+	case "":
+		return " "
+
+	case "Percent" :
+		return "%"
+
+	case "Count/Second":
+		return "/s"
+
+	case "Milliseconds":
+		return "ms"
+
+	case "Bytes":
+		return "B"
+
+	case "Bytes/Second":
+		return "B/s"
+
+	default:
+		return unit
+	}
+}
+
 func (z *Zaws) ShowEC2CloudwatchMetricsList() {
 	list := make([]Data, 0)
 	metrics := get_metric_list(z.AwsSession, "InstanceId", z.TargetId)
@@ -232,12 +316,12 @@ func (z *Zaws) ShowEC2CloudwatchMetricsList() {
 		datapoints := get_metric_stats(z.AwsSession, "InstanceId", z.TargetId, *metric.MetricName, *metric.Namespace)
 		data := Data{MetricName: *metric.MetricName, MetricNamespace: *metric.Namespace}
 		if len(datapoints) > 0 {
-			data.MetricUnit = *datapoints[0].Unit
+			data.MetricUnit = map_unit_name(*datapoints[0].Unit)
 		}
 		list = append(list, data)
 	}
 
-	fmt.Printf(convert_to_lldjson_string(list))
+	fmt.Println(convert_to_lldjson_string(list))
 }
 
 func (z *Zaws) ShowRDSCloudwatchMetricsList() {
@@ -247,12 +331,12 @@ func (z *Zaws) ShowRDSCloudwatchMetricsList() {
 		datapoints := get_metric_stats(z.AwsSession, "DBInstanceIdentifier", z.TargetId, *metric.MetricName, *metric.Namespace)
 		data := Data{MetricName: *metric.MetricName, MetricNamespace: *metric.Namespace}
 		if len(datapoints) > 0 {
-			data.MetricUnit = *datapoints[0].Unit
+			data.MetricUnit = map_unit_name(*datapoints[0].Unit)
 		}
 		list = append(list, data)
 	}
 
-	fmt.Printf(convert_to_lldjson_string(list))
+	fmt.Println(convert_to_lldjson_string(list))
 }
 
 func (z *Zaws) ShowELBCloudwatchMetricsList() {
@@ -269,12 +353,12 @@ func (z *Zaws) ShowELBCloudwatchMetricsList() {
 		}
 		data := Data{MetricName: metric_name, MetricNamespace: *metric.Namespace}
 		if len(datapoints) > 0 {
-			data.MetricUnit = *datapoints[0].Unit
+			data.MetricUnit = map_unit_name(*datapoints[0].Unit)
 		}
 		list = append(list, data)
 	}
 
-	fmt.Printf(convert_to_lldjson_string(list))
+	fmt.Println(convert_to_lldjson_string(list))
 }
 
 func (z *Zaws) ShowSQSCloudwatchMetricsList() {
@@ -291,12 +375,12 @@ func (z *Zaws) ShowSQSCloudwatchMetricsList() {
 		}
 		data := Data{MetricName: metric_name, MetricNamespace: *metric.Namespace}
 		if len(datapoints) > 0 {
-			data.MetricUnit = *datapoints[0].Unit
+			data.MetricUnit = map_unit_name(*datapoints[0].Unit)
 		}
 		list = append(list, data)
 	}
 
-	fmt.Printf(convert_to_lldjson_string(list))
+	fmt.Println(convert_to_lldjson_string(list))
 }
 
 func (z *Zaws) SendEc2MetricStats() {
@@ -328,7 +412,7 @@ func (z *Zaws) SendMetricStats(identity_name string) {
 
 		if len(datapoints) > 0 {
 			data_time := *datapoints[0].Timestamp
-			send_data = append(send_data, zabbix_sender.DataItem{Hostname: z.TargetId, Key: "cloudwatch.metric[" + metric_name + "]", Value: strconv.FormatFloat(*datapoints[0].Average, 'f', 4, 64), Timestamp: data_time.Unix()})
+			send_data = append(send_data, zabbix_sender.DataItem{Hostname: z.TargetId, Key: "cloudwatch.metric[" + metric_name + "]", Value: strconv.FormatFloat( get_datapont_value(metric_name, datapoints[0]), 'f', 4, 64), Timestamp: data_time.Unix()})
 		}
 	}
 	addr, _ := net.ResolveTCPAddr("tcp", z.ZabbixHost+":"+z.ZabbixPort)
@@ -337,7 +421,7 @@ func (z *Zaws) SendMetricStats(identity_name string) {
 		fmt.Printf("[ERROR]: zabbix sender error!: %s", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[INFO]: Successful sending data to Zabbix: resp", res)
+	fmt.Printf("[INFO]: Successful sending data to Zabbix: resp: %s", res)
 }
 
 func main() {
