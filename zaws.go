@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/aws/aws-sdk-go/service/rds"
 	//"github.com/aws/aws-sdk-go/service/sqs"
 	"net"
@@ -24,6 +25,7 @@ type Zaws struct {
 	AccessKeyId string
 	SecretKeyId string
 	TargetId    string
+	TargetName  string
 	MetricName  string
 	ZabbixHost  string
 	ZabbixPort  string
@@ -49,6 +51,7 @@ func (z *Zaws) SetOption() {
 	flag.StringVar(&z.SecretKeyId, "s", os.Getenv("AWS_SECRET_ACCESS_KEY"), "Set AWS API Secret key id")
 	flag.StringVar(&z.TargetId, "id", "", "Set target object id")
 	flag.StringVar(&z.TargetId, "i", "", "Set target object id")
+	flag.StringVar(&z.TargetName, "tg", "", "Set the target name to use where it is different from the id")
 	flag.StringVar(&z.MetricName, "metric", "", "Set metric name")
 	flag.StringVar(&z.MetricName, "m", "", "Set metric name")
 	flag.StringVar(&z.ZabbixHost, "host", "localhost", "Set zabbix host name")
@@ -236,6 +239,21 @@ func get_elb_list(sess *session.Session) []*elb.LoadBalancerDescription {
 	return resp.LoadBalancerDescriptions
 }
 
+func get_elbv2_list(sess *session.Session) []*elbv2.LoadBalancer {
+	svc := elbv2.New(sess)
+	params := &elbv2.DescribeLoadBalancersInput{
+		Names: []*string{},
+
+	}
+	resp, err := svc.DescribeLoadBalancers(params)
+
+	if err != nil {
+		fmt.Printf("[ERROR] Fail DescribeLoadBalancers API call: %s \n", err.Error())
+		return nil
+	}
+	return resp.LoadBalancers
+}
+
 // zaws method
 func (z *Zaws) ShowEc2List() {
 	list := make([]Data, 0)
@@ -261,6 +279,16 @@ func (z *Zaws) ShowEc2List() {
 func (z *Zaws) ShowElbList() {
 	list := make([]Data, 0)
 	elbs := get_elb_list(z.AwsSession)
+	for _, elb_data := range elbs {
+		data := Data{ElbName: *elb_data.LoadBalancerName, ElbDnsName: *elb_data.DNSName}
+		list = append(list, data)
+	}
+	fmt.Printf(convert_to_lldjson_string(list))
+}
+
+func (z *Zaws) ShowElbV2List() {
+	list := make([]Data, 0)
+	elbs := get_elbv2_list(z.AwsSession)
 	for _, elb_data := range elbs {
 		data := Data{ElbName: *elb_data.LoadBalancerName, ElbDnsName: *elb_data.DNSName}
 		list = append(list, data)
@@ -361,6 +389,30 @@ func (z *Zaws) ShowELBCloudwatchMetricsList() {
 	fmt.Println(convert_to_lldjson_string(list))
 }
 
+func (z *Zaws) ShowELBV2CloudwatchMetricsList() {
+	list := make([]Data, 0)
+
+	metrics := get_metric_list(z.AwsSession, "LoadBalancer", z.TargetId)
+
+	for _, metric := range metrics {
+		datapoints := get_metric_stats(z.AwsSession, "LoadBalancer", z.TargetId, *metric.MetricName, *metric.Namespace)
+		metric_name := *metric.MetricName
+		for _, dimension := range metric.Dimensions {
+			if *dimension.Name == "TargetGroup" {
+				metric_name = *metric.MetricName + "." + *dimension.Value
+				break
+			}
+		}
+		data := Data{MetricName: metric_name, MetricNamespace: *metric.Namespace}
+		if len(datapoints) > 0 {
+			data.MetricUnit = map_unit_name(*datapoints[0].Unit)
+		}
+		list = append(list, data)
+	}
+
+	fmt.Println(convert_to_lldjson_string(list))
+}
+
 func (z *Zaws) ShowSQSCloudwatchMetricsList() {
 	list := make([]Data, 0)
 	metrics := get_metric_list(z.AwsSession, "QueueName", z.TargetId)
@@ -392,19 +444,26 @@ func (z *Zaws) SendRdsMetricStats() {
 func (z *Zaws) SendElbMetricStats() {
 	z.SendMetricStats("LoadBalancerName")
 }
+func (z *Zaws) SendElbV2MetricStats() {
+	z.SendMetricStats("LoadBalancer")
+}
 func (z *Zaws) SendSQSMetricStats() {
 	z.SendMetricStats("QueueName")
 }
 
 func (z *Zaws) SendMetricStats(identity_name string) {
 	var send_data []zabbix_sender.DataItem
-
+	var dimensionName string
+	dimensionName = "AvailabilityZone"
+	if identity_name == "LoadBalancer"{
+		dimensionName = "TargetGroup"
+	}
 	metrics := get_metric_list(z.AwsSession, identity_name, z.TargetId)
 	for _, metric := range metrics {
 		datapoints := get_metric_stats(z.AwsSession, identity_name, z.TargetId, *metric.MetricName, *metric.Namespace)
 		metric_name := *metric.MetricName
 		for _, dimension := range metric.Dimensions {
-			if *dimension.Name == "AvailabilityZone" {
+			if *dimension.Name == dimensionName {
 				metric_name = *metric.MetricName + "." + *dimension.Value
 				break
 			}
@@ -412,9 +471,14 @@ func (z *Zaws) SendMetricStats(identity_name string) {
 
 		if len(datapoints) > 0 {
 			data_time := *datapoints[0].Timestamp
-			send_data = append(send_data, zabbix_sender.DataItem{Hostname: z.TargetId, Key: "cloudwatch.metric[" + metric_name + "]", Value: strconv.FormatFloat( get_datapont_value(metric_name, datapoints[0]), 'f', 4, 64), Timestamp: data_time.Unix()})
+			if z.TargetName == "" {
+				send_data = append(send_data, zabbix_sender.DataItem{Hostname: z.TargetId, Key: "cloudwatch.metric[" + metric_name + "]", Value: strconv.FormatFloat(get_datapont_value(metric_name, datapoints[0]), 'f', 4, 64), Timestamp: data_time.Unix()})
+			} else {
+				send_data = append(send_data, zabbix_sender.DataItem{Hostname: z.TargetName, Key: "cloudwatch.metric[" + metric_name + "]", Value: strconv.FormatFloat(get_datapont_value(metric_name, datapoints[0]), 'f', 4, 64), Timestamp: data_time.Unix()})
+			}
 		}
 	}
+	fmt.Println(send_data)
 	addr, _ := net.ResolveTCPAddr("tcp", z.ZabbixHost+":"+z.ZabbixPort)
 	res, err := zabbix_sender.Send(addr, send_data)
 	if err != nil {
@@ -447,6 +511,17 @@ func main() {
 		default:
 			usage()
 		}
+	case "alb":
+		fallthrough
+	case "nlb":
+		switch os.Args[2] {
+		case "list":
+			os.Args = os.Args[2:]
+			zaws := NewZaws()
+			zaws.ShowElbV2List()
+		default:
+			usage()
+		}
 	case "rds":
 		switch os.Args[2] {
 		case "list":
@@ -475,6 +550,12 @@ func main() {
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
 				zaws.ShowELBCloudwatchMetricsList()
+			case "nlb":
+				fallthrough
+			case "alb":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.ShowELBV2CloudwatchMetricsList()
 			case "sqs":
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
@@ -499,6 +580,12 @@ func main() {
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
 				zaws.SendElbMetricStats()
+			case "alb":
+				fallthrough
+			case "nlb":
+				os.Args = os.Args[3:]
+				zaws := NewZaws()
+				zaws.SendElbV2MetricStats()
 			case "sqs":
 				os.Args = os.Args[3:]
 				zaws := NewZaws()
